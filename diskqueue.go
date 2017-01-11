@@ -15,8 +15,20 @@ import (
 	"time"
 )
 
-// diskQueue implements the BackendQueue interface
-// providing a filesystem backed FIFO queue
+type Logger interface {
+	Output(maxdepth int, s string) error
+}
+
+type Interface interface {
+	Put([]byte) error
+	ReadChan() chan []byte // this is expected to be an *unbuffered* channel
+	Close() error
+	Delete() error
+	Depth() int64
+	Empty() error
+}
+
+// diskQueue implements a filesystem backed FIFO queue
 type diskQueue struct {
 	// 64bit atomic vars need to be first for proper alignment on 32bit platforms
 
@@ -64,12 +76,12 @@ type diskQueue struct {
 	logger Logger
 }
 
-// newDiskQueue instantiates a new instance of diskQueue, retrieving metadata
+// New instantiates an instance of diskQueue, retrieving metadata
 // from the filesystem and starting the read ahead goroutine
-func newDiskQueue(name string, dataPath string, maxBytesPerFile int64,
+func New(name string, dataPath string, maxBytesPerFile int64,
 	minMsgSize int32, maxMsgSize int32,
 	syncEvery int64, syncTimeout time.Duration,
-	logger Logger) BackendQueue {
+	logger Logger) Interface {
 	d := diskQueue{
 		name:              name,
 		dataPath:          dataPath,
