@@ -52,6 +52,7 @@ type Interface interface {
 	Delete() error
 	Depth() int64
 	Empty() error
+	Peek() []byte
 }
 
 // diskQueue implements a filesystem backed FIFO queue
@@ -90,6 +91,7 @@ type diskQueue struct {
 
 	// exposed via ReadChan()
 	readChan chan []byte
+	peekChan chan []byte
 
 	// internal channels
 	writeChan         chan []byte
@@ -114,6 +116,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		minMsgSize:        minMsgSize,
 		maxMsgSize:        maxMsgSize,
 		readChan:          make(chan []byte),
+		peekChan:          make(chan []byte),
 		writeChan:         make(chan []byte),
 		writeResponseChan: make(chan error),
 		emptyChan:         make(chan int),
@@ -143,6 +146,10 @@ func (d *diskQueue) Depth() int64 {
 // ReadChan returns the []byte channel for reading data
 func (d *diskQueue) ReadChan() chan []byte {
 	return d.readChan
+}
+
+func (d *diskQueue) Peek() []byte {
+	return <-d.peekChan
 }
 
 // Put writes a []byte to the queue
@@ -535,7 +542,6 @@ func (d *diskQueue) moveForward() {
 	d.readFileNum = d.nextReadFileNum
 	d.readPos = d.nextReadPos
 	depth := atomic.AddInt64(&d.depth, -1)
-
 	// see if we need to clean up the old file
 	if oldReadFileNum != d.nextReadFileNum {
 		// sync every time we start reading from a new file
@@ -629,6 +635,7 @@ func (d *diskQueue) ioLoop() {
 			}
 			r = d.readChan
 		} else {
+			dataRead = nil
 			r = nil
 		}
 
@@ -639,6 +646,8 @@ func (d *diskQueue) ioLoop() {
 			count++
 			// moveForward sets needSync flag if a file is removed
 			d.moveForward()
+		case d.peekChan <- dataRead:
+			// peek
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()
 			count = 0
