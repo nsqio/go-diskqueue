@@ -47,7 +47,7 @@ func (l LogLevel) String() string {
 
 type Interface interface {
 	Put([]byte) error
-	ReadChan() chan []byte // this is expected to be an *unbuffered* channel
+	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
 	Delete() error
 	Depth() int64
@@ -140,8 +140,8 @@ func (d *diskQueue) Depth() int64 {
 	return atomic.LoadInt64(&d.depth)
 }
 
-// ReadChan returns the []byte channel for reading data
-func (d *diskQueue) ReadChan() chan []byte {
+// ReadChan returns the receive-only []byte channel for reading data
+func (d *diskQueue) ReadChan() <-chan []byte {
 	return d.readChan
 }
 
