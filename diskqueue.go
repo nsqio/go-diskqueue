@@ -387,7 +387,7 @@ func (d *diskQueue) writeOne(data []byte) error {
 	d.writePos += totalBytes
 	atomic.AddInt64(&d.depth, 1)
 
-	if d.writePos > d.maxBytesPerFile {
+	if d.writePos >= d.maxBytesPerFile {
 		d.writeFileNum++
 		d.writePos = 0
 
