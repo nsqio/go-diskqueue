@@ -94,6 +94,8 @@ type diskQueue struct {
 	// internal channels
 	writeChan         chan []byte
 	writeResponseChan chan error
+	depthChan         chan int
+	depthResponseChan chan int64
 	emptyChan         chan int
 	emptyResponseChan chan error
 	exitChan          chan int
@@ -114,6 +116,8 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		minMsgSize:        minMsgSize,
 		maxMsgSize:        maxMsgSize,
 		readChan:          make(chan []byte),
+		depthChan:         make(chan int),
+		depthResponseChan: make(chan int64),
 		writeChan:         make(chan []byte),
 		writeResponseChan: make(chan error),
 		emptyChan:         make(chan int),
@@ -137,7 +141,8 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 
 // Depth returns the depth of the queue
 func (d *diskQueue) Depth() int64 {
-	return atomic.LoadInt64(&d.depth)
+	d.depthChan <- 1
+	return <-d.depthResponseChan
 }
 
 // ReadChan returns the receive-only []byte channel for reading data
@@ -639,6 +644,8 @@ func (d *diskQueue) ioLoop() {
 			count++
 			// moveForward sets needSync flag if a file is removed
 			d.moveForward()
+		case <-d.depthChan:
+			d.depthResponseChan <- atomic.LoadInt64(&d.depth)
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()
 			count = 0
