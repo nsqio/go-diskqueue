@@ -123,6 +123,11 @@ func TestDiskQueueRoll(t *testing.T) {
 
 	Equal(t, int64(1), dq.(*diskQueue).writeFileNum)
 	Equal(t, int64(0), dq.(*diskQueue).writePos)
+
+	for i := 10; i > 0; i-- {
+		Equal(t, msg, <-dq.ReadChan())
+		Equal(t, int64(i-1), dq.Depth())
+	}
 }
 
 func assertFileNotExist(t *testing.T, fn string) {
