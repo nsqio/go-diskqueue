@@ -188,6 +188,8 @@ func (d *diskQueue) exit(deleted bool) error {
 	// ensure that ioLoop has exited
 	<-d.exitSyncChan
 
+	close(d.depthChan)
+
 	if d.readFile != nil {
 		d.readFile.Close()
 		d.readFile = nil
