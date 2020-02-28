@@ -138,7 +138,12 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 
 // Depth returns the depth of the queue
 func (d *diskQueue) Depth() int64 {
-	return <-d.depthChan
+	depth, ok := <-d.depthChan
+	if !ok {
+		// ioLoop exited
+		depth = d.depth
+	}
+	return depth
 }
 
 // ReadChan returns the receive-only []byte channel for reading data
@@ -187,6 +192,8 @@ func (d *diskQueue) exit(deleted bool) error {
 	close(d.exitChan)
 	// ensure that ioLoop has exited
 	<-d.exitSyncChan
+
+	close(d.depthChan)
 
 	if d.readFile != nil {
 		d.readFile.Close()
