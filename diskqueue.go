@@ -67,15 +67,16 @@ type diskQueue struct {
 	sync.RWMutex
 
 	// instantiation time metadata
-	name            string
-	dataPath        string
-	maxBytesPerFile int64 // currently this cannot change once created
-	minMsgSize      int32
-	maxMsgSize      int32
-	syncEvery       int64         // number of writes per fsync
-	syncTimeout     time.Duration // duration of time per fsync
-	exitFlag        int32
-	needSync        bool
+	name                string
+	dataPath            string
+	maxBytesPerFile     int64 // cannot change once created
+	maxBytesPerFileRead int64
+	minMsgSize          int32
+	maxMsgSize          int32
+	syncEvery           int64         // number of writes per fsync
+	syncTimeout         time.Duration // duration of time per fsync
+	exitFlag            int32
+	needSync            bool
 
 	// keeps track of the position where we have read
 	// (but not yet sent over readChan)
@@ -293,6 +294,16 @@ func (d *diskQueue) readOne() ([]byte, error) {
 			}
 		}
 
+		// for "complete" files (i.e. not the "current" file), maxBytesPerFileRead
+		// should be initialized to the file's size, or default to maxBytesPerFile
+		d.maxBytesPerFileRead = d.maxBytesPerFile
+		if d.readFileNum < d.writeFileNum {
+			stat, err := d.readFile.Stat()
+			if err == nil {
+				d.maxBytesPerFileRead = stat.Size()
+			}
+		}
+
 		d.reader = bufio.NewReader(d.readFile)
 	}
 
@@ -326,10 +337,10 @@ func (d *diskQueue) readOne() ([]byte, error) {
 	d.nextReadPos = d.readPos + totalBytes
 	d.nextReadFileNum = d.readFileNum
 
-	// TODO: each data file should embed the maxBytesPerFile
-	// as the first 8 bytes (at creation time) ensuring that
-	// the value can change without affecting runtime
-	if d.nextReadPos > d.maxBytesPerFile {
+	// we only consider rotating if we're reading a "complete" file
+	// and since we cannot know the size at which it was rotated, we
+	// rely on maxBytesPerFileRead rather than maxBytesPerFile
+	if d.readFileNum < d.writeFileNum && d.nextReadPos >= d.maxBytesPerFileRead {
 		if d.readFile != nil {
 			d.readFile.Close()
 			d.readFile = nil
@@ -396,6 +407,10 @@ func (d *diskQueue) writeOne(data []byte) error {
 	d.depth += 1
 
 	if d.writePos >= d.maxBytesPerFile {
+		if d.readFileNum == d.writeFileNum {
+			d.maxBytesPerFileRead = d.writePos
+		}
+
 		d.writeFileNum++
 		d.writePos = 0
 
