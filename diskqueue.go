@@ -644,16 +644,7 @@ func (d *diskQueue) ioLoop() {
 			count = 0
 		}
 
-		readable := false
-		if d.readFileNum < d.writeFileNum {
-			readable = true
-		} else if d.readFileNum == d.writeFileNum {
-			if d.readPos < d.writePos {
-				readable = true
-			}
-		}
-
-		if readable {
+		if (d.readFileNum < d.writeFileNum) || (d.readPos < d.writePos) {
 			if d.nextReadPos == d.readPos {
 				dataRead, err = d.readOne()
 				if err != nil {
