@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -47,12 +46,12 @@ func (l LogLevel) String() string {
 
 type Interface interface {
 	Put([]byte) error
-	ReadChan() chan []byte // this is expected to be an *unbuffered* channel
+	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
 	Delete() error
 	Depth() int64
 	Empty() error
-	Peek() []byte
+  Peek() ([]byte, error)
 }
 
 // diskQueue implements a filesystem backed FIFO queue
@@ -94,6 +93,7 @@ type diskQueue struct {
 	peekChan chan []byte
 
 	// internal channels
+	depthChan         chan int64
 	writeChan         chan []byte
 	writeResponseChan chan error
 	emptyChan         chan int
@@ -117,6 +117,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		maxMsgSize:        maxMsgSize,
 		readChan:          make(chan []byte),
 		peekChan:          make(chan []byte),
+		depthChan:         make(chan int64),
 		writeChan:         make(chan []byte),
 		writeResponseChan: make(chan error),
 		emptyChan:         make(chan int),
@@ -140,16 +141,25 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 
 // Depth returns the depth of the queue
 func (d *diskQueue) Depth() int64 {
-	return atomic.LoadInt64(&d.depth)
+	depth, ok := <-d.depthChan
+	if !ok {
+		// ioLoop exited
+		depth = d.depth
+	}
+	return depth
 }
 
-// ReadChan returns the []byte channel for reading data
-func (d *diskQueue) ReadChan() chan []byte {
+// ReadChan returns the receive-only []byte channel for reading data
+func (d *diskQueue) ReadChan() <-chan []byte {
 	return d.readChan
 }
 
-func (d *diskQueue) Peek() []byte {
-	return <-d.peekChan
+func (d *diskQueue) Peek() ([]byte, error) {
+	ret, ok := <-d.peekChan
+	if !ok {
+		return nil, errors.New("exiting")
+	}
+	return ret, nil
 }
 
 // Put writes a []byte to the queue
@@ -193,6 +203,9 @@ func (d *diskQueue) exit(deleted bool) error {
 	close(d.exitChan)
 	// ensure that ioLoop has exited
 	<-d.exitSyncChan
+
+	close(d.depthChan)
+  close(d.peekChan)
 
 	if d.readFile != nil {
 		d.readFile.Close()
@@ -263,7 +276,7 @@ func (d *diskQueue) skipToNextRWFile() error {
 	d.readPos = 0
 	d.nextReadFileNum = d.writeFileNum
 	d.nextReadPos = 0
-	atomic.StoreInt64(&d.depth, 0)
+	d.depth = 0
 
 	return err
 }
@@ -392,9 +405,9 @@ func (d *diskQueue) writeOne(data []byte) error {
 
 	totalBytes := int64(4 + dataLen)
 	d.writePos += totalBytes
-	atomic.AddInt64(&d.depth, 1)
+	d.depth += 1
 
-	if d.writePos > d.maxBytesPerFile {
+	if d.writePos >= d.maxBytesPerFile {
 		d.writeFileNum++
 		d.writePos = 0
 
@@ -453,7 +466,7 @@ func (d *diskQueue) retrieveMetaData() error {
 	if err != nil {
 		return err
 	}
-	atomic.StoreInt64(&d.depth, depth)
+	d.depth = depth
 	d.nextReadFileNum = d.readFileNum
 	d.nextReadPos = d.readPos
 
@@ -475,7 +488,7 @@ func (d *diskQueue) persistMetaData() error {
 	}
 
 	_, err = fmt.Fprintf(f, "%d\n%d,%d\n%d,%d\n",
-		atomic.LoadInt64(&d.depth),
+		d.depth,
 		d.readFileNum, d.readPos,
 		d.writeFileNum, d.writePos)
 	if err != nil {
@@ -515,7 +528,7 @@ func (d *diskQueue) checkTailCorruption(depth int64) {
 				d.name, depth)
 		}
 		// force set depth 0
-		atomic.StoreInt64(&d.depth, 0)
+		d.depth = 0
 		d.needSync = true
 	}
 
@@ -541,7 +554,7 @@ func (d *diskQueue) moveForward() {
 	oldReadFileNum := d.readFileNum
 	d.readFileNum = d.nextReadFileNum
 	d.readPos = d.nextReadPos
-	depth := atomic.AddInt64(&d.depth, -1)
+	d.depth -= 1
 	// see if we need to clean up the old file
 	if oldReadFileNum != d.nextReadFileNum {
 		// sync every time we start reading from a new file
@@ -554,7 +567,7 @@ func (d *diskQueue) moveForward() {
 		}
 	}
 
-	d.checkTailCorruption(depth)
+	d.checkTailCorruption(d.depth)
 }
 
 func (d *diskQueue) handleReadError() {
@@ -647,7 +660,7 @@ func (d *diskQueue) ioLoop() {
 			// moveForward sets needSync flag if a file is removed
 			d.moveForward()
 		case d.peekChan <- dataRead:
-			// peek
+		case d.depthChan <- d.depth:
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()
 			count = 0
