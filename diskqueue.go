@@ -24,6 +24,8 @@ const (
 	WARN  = LogLevel(3)
 	ERROR = LogLevel(4)
 	FATAL = LogLevel(5)
+
+	waitSync = 3
 )
 
 type AppLogFunc func(lvl LogLevel, f string, args ...interface{})
@@ -99,6 +101,10 @@ type diskQueue struct {
 	exitChan          chan int
 	exitSyncChan      chan int
 
+	//sync
+	syncChan         chan int64
+	exitSyncFileChan chan int
+
 	logf AppLogFunc
 }
 
@@ -124,6 +130,8 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		syncEvery:         syncEvery,
 		syncTimeout:       syncTimeout,
 		logf:              logf,
+		syncChan:          make(chan int64, waitSync),
+		exitSyncFileChan:  make(chan int),
 	}
 
 	// no need to lock here, nothing else could possibly be touching this instance
@@ -132,6 +140,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		d.logf(ERROR, "DISKQUEUE(%s) failed to retrieveMetaData - %s", d.name, err)
 	}
 
+	go d.syncFile()
 	go d.ioLoop()
 	return &d
 }
@@ -618,10 +627,8 @@ func (d *diskQueue) ioLoop() {
 		}
 
 		if d.needSync {
-			err = d.sync()
-			if err != nil {
-				d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
-			}
+			d.syncChan <- count
+			d.needSync = false
 			count = 0
 		}
 
@@ -668,5 +675,29 @@ func (d *diskQueue) ioLoop() {
 exit:
 	d.logf(INFO, "DISKQUEUE(%s): closing ... ioLoop", d.name)
 	syncTicker.Stop()
+	<-d.exitSyncFileChan //wait syncFile exit
 	d.exitSyncChan <- 1
+}
+
+//asynchronous persistence
+func (d *diskQueue) syncFile() {
+	err := d.sync()
+	if err != nil {
+		d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
+	}
+	for {
+		select {
+		case <-d.syncChan:
+			err = d.sync()
+			if err != nil {
+				d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
+			}
+		case <-d.exitChan:
+			d.syncChan = nil
+			goto exit
+		}
+	}
+exit:
+	d.exitSyncFileChan <- 1
+	d.logf(INFO, "DISKQUEUE(%s) closing....syncFile", d.name)
 }
