@@ -204,6 +204,9 @@ func (d *diskQueue) exit(deleted bool) error {
 	// ensure that ioLoop has exited
 	<-d.exitSyncChan
 
+	close(d.exitFileChan) //wait syncFile exit
+	<- d.exitSyncFileChan
+
 	close(d.depthChan)
 
 	if d.readFile != nil {
@@ -677,8 +680,6 @@ func (d *diskQueue) ioLoop() {
 exit:
 	d.logf(INFO, "DISKQUEUE(%s): closing ... ioLoop", d.name)
 	syncTicker.Stop()
-	close(d.exitFileChan) //wait syncFile exit
-	<- d.exitSyncFileChan
 	d.exitSyncChan <- 1
 }
 
