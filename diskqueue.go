@@ -701,6 +701,6 @@ func (d *diskQueue) syncFile() {
 		}
 	}
 exit:
-	d.exitSyncFileChan <- 1
 	d.logf(INFO, "DISKQUEUE(%s) closing....syncFile", d.name)
+	d.exitSyncFileChan <- 1
 }
