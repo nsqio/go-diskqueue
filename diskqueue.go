@@ -102,8 +102,9 @@ type diskQueue struct {
 	exitSyncChan      chan int
 
 	//sync
-	syncChan         chan int64
-	exitSyncFileChan chan int
+	syncChan			chan int64
+	exitFileChan		chan int
+	exitSyncFileChan	chan int
 
 	logf AppLogFunc
 }
@@ -131,6 +132,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		syncTimeout:       syncTimeout,
 		logf:              logf,
 		syncChan:          make(chan int64, waitSync),
+		exitFileChan:	   make(chan int),
 		exitSyncFileChan:  make(chan int),
 	}
 
@@ -675,7 +677,8 @@ func (d *diskQueue) ioLoop() {
 exit:
 	d.logf(INFO, "DISKQUEUE(%s): closing ... ioLoop", d.name)
 	syncTicker.Stop()
-	<-d.exitSyncFileChan //wait syncFile exit
+	close(d.exitFileChan) //wait syncFile exit
+	<- d.exitSyncFileChan
 	d.exitSyncChan <- 1
 }
 
@@ -692,7 +695,7 @@ func (d *diskQueue) syncFile() {
 			if err != nil {
 				d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
 			}
-		case <-d.exitChan:
+		case <-d.exitFileChan:
 			d.syncChan = nil
 			goto exit
 		}
