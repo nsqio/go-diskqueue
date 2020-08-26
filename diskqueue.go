@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,11 +20,12 @@ import (
 type LogLevel int
 
 const (
-	DEBUG = LogLevel(1)
-	INFO  = LogLevel(2)
-	WARN  = LogLevel(3)
-	ERROR = LogLevel(4)
-	FATAL = LogLevel(5)
+	DEBUG    = LogLevel(1)
+	INFO     = LogLevel(2)
+	WARN     = LogLevel(3)
+	ERROR    = LogLevel(4)
+	FATAL    = LogLevel(5)
+	waitSync = 3
 )
 
 type AppLogFunc func(lvl LogLevel, f string, args ...interface{})
@@ -100,6 +102,11 @@ type diskQueue struct {
 	exitSyncChan      chan int
 
 	logf AppLogFunc
+	//
+	syncChan         chan int64
+	exitFileChan     chan int
+	exitSyncFileChan chan int
+	syncMutex        sync.Mutex
 }
 
 // New instantiates an instance of diskQueue, retrieving metadata
@@ -124,6 +131,9 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		syncEvery:         syncEvery,
 		syncTimeout:       syncTimeout,
 		logf:              logf,
+		syncChan:          make(chan int64, waitSync),
+		exitFileChan:      make(chan int),
+		exitSyncFileChan:  make(chan int),
 	}
 
 	// no need to lock here, nothing else could possibly be touching this instance
@@ -132,6 +142,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		d.logf(ERROR, "DISKQUEUE(%s) failed to retrieveMetaData - %s", d.name, err)
 	}
 
+	go d.syncFile()
 	go d.ioLoop()
 	return &d
 }
@@ -211,8 +222,8 @@ func (d *diskQueue) exit(deleted bool) error {
 // Empty destructively clears out any pending data in the queue
 // by fast forwarding read positions and removing intermediate files
 func (d *diskQueue) Empty() error {
-	d.RLock()
-	defer d.RUnlock()
+	d.Lock()
+	defer d.Unlock()
 
 	if d.exitFlag == 1 {
 		return errors.New("exiting")
@@ -258,13 +269,22 @@ func (d *diskQueue) skipToNextRWFile() error {
 		}
 	}
 
-	d.writeFileNum++
-	d.writePos = 0
-	d.readFileNum = d.writeFileNum
-	d.readPos = 0
-	d.nextReadFileNum = d.writeFileNum
-	d.nextReadPos = 0
-	d.depth = 0
+	//d.writeFileNum++
+	//d.writePos = 0
+	//d.readFileNum = d.writeFileNum
+	//d.readPos = 0
+	//d.nextReadFileNum = d.writeFileNum
+	//d.nextReadPos = 0
+	//d.depth = 0
+
+	atomic.AddInt64(&d.writeFileNum, 1)
+	writeFileNum := atomic.LoadInt64(&d.writeFileNum)
+	atomic.StoreInt64(&d.writePos, 0)
+	atomic.StoreInt64(&d.readFileNum, writeFileNum)
+	atomic.StoreInt64(&d.readPos, 0)
+	atomic.StoreInt64(&d.nextReadFileNum, writeFileNum)
+	atomic.StoreInt64(&d.nextReadPos, 0)
+	atomic.StoreInt64(&d.depth, 0)
 
 	return err
 }
@@ -392,12 +412,12 @@ func (d *diskQueue) writeOne(data []byte) error {
 	}
 
 	totalBytes := int64(4 + dataLen)
-	d.writePos += totalBytes
-	d.depth += 1
+	atomic.AddInt64(&d.writePos, totalBytes)
+	atomic.AddInt64(&d.depth, 1)
 
-	if d.writePos >= d.maxBytesPerFile {
-		d.writeFileNum++
-		d.writePos = 0
+	if atomic.LoadInt64(&d.writePos) >= d.maxBytesPerFile {
+		atomic.AddInt64(&d.writeFileNum, 1)
+		atomic.StoreInt64(&d.writePos, 0)
 
 		// sync every time we start writing to a new file
 		err = d.sync()
@@ -419,18 +439,22 @@ func (d *diskQueue) sync() error {
 	if d.writeFile != nil {
 		err := d.writeFile.Sync()
 		if err != nil {
+			d.syncMutex.Lock()
 			d.writeFile.Close()
 			d.writeFile = nil
+			d.syncMutex.Unlock()
 			return err
 		}
 	}
 
+	d.syncMutex.Lock()
 	err := d.persistMetaData()
+	d.syncMutex.Unlock()
 	if err != nil {
 		return err
 	}
 
-	d.needSync = false
+	//d.needSync = false
 	return nil
 }
 
@@ -476,9 +500,9 @@ func (d *diskQueue) persistMetaData() error {
 	}
 
 	_, err = fmt.Fprintf(f, "%d\n%d,%d\n%d,%d\n",
-		d.depth,
-		d.readFileNum, d.readPos,
-		d.writeFileNum, d.writePos)
+		atomic.LoadInt64(&d.depth),
+		atomic.LoadInt64(&d.readFileNum), atomic.LoadInt64(&d.readPos),
+		atomic.LoadInt64(&d.writeFileNum), atomic.LoadInt64(&d.writePos))
 	if err != nil {
 		f.Close()
 		return err
@@ -516,7 +540,7 @@ func (d *diskQueue) checkTailCorruption(depth int64) {
 				d.name, depth)
 		}
 		// force set depth 0
-		d.depth = 0
+		atomic.StoreInt64(&d.depth, 0)
 		d.needSync = true
 	}
 
@@ -539,10 +563,12 @@ func (d *diskQueue) checkTailCorruption(depth int64) {
 }
 
 func (d *diskQueue) moveForward() {
-	oldReadFileNum := d.readFileNum
-	d.readFileNum = d.nextReadFileNum
-	d.readPos = d.nextReadPos
-	d.depth -= 1
+	oldReadFileNum := atomic.LoadInt64(&d.readFileNum)
+	readFileNum := atomic.LoadInt64(&d.nextReadFileNum)
+	atomic.StoreInt64(&d.readFileNum, readFileNum)
+	readPos := atomic.LoadInt64(&d.nextReadPos)
+	atomic.StoreInt64(&d.readPos, readPos)
+	atomic.AddInt64(&d.depth, -1)
 
 	// see if we need to clean up the old file
 	if oldReadFileNum != d.nextReadFileNum {
@@ -568,11 +594,11 @@ func (d *diskQueue) handleReadError() {
 			d.writeFile.Close()
 			d.writeFile = nil
 		}
-		d.writeFileNum++
-		d.writePos = 0
+		atomic.AddInt64(&d.writeFileNum, 1)
+		atomic.StoreInt64(&d.writePos, 0)
 	}
 
-	badFn := d.fileName(d.readFileNum)
+	badFn := d.fileName(atomic.LoadInt64(&d.readFileNum))
 	badRenameFn := badFn + ".bad"
 
 	d.logf(WARN,
@@ -618,19 +644,25 @@ func (d *diskQueue) ioLoop() {
 		}
 
 		if d.needSync {
-			err = d.sync()
-			if err != nil {
-				d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
-			}
+			d.syncChan <- count
+			//err = d.sync()
+			//if err != nil {
+			//	d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
+			//}
+			d.needSync = false
 			count = 0
 		}
 
-		if (d.readFileNum < d.writeFileNum) || (d.readPos < d.writePos) {
-			if d.nextReadPos == d.readPos {
+		readFileNum := atomic.LoadInt64(&d.readFileNum)
+		writeFileNum := atomic.LoadInt64(&d.writeFileNum)
+		readPos := atomic.LoadInt64(&d.readPos)
+		writePos := atomic.LoadInt64(&d.writePos)
+		if (readFileNum < writeFileNum) || (readPos < writePos) {
+			if atomic.LoadInt64(&d.nextReadPos) == readPos {
 				dataRead, err = d.readOne()
 				if err != nil {
 					d.logf(ERROR, "DISKQUEUE(%s) reading at %d of %s - %s",
-						d.name, d.readPos, d.fileName(d.readFileNum), err)
+						d.name, atomic.LoadInt64(&d.readPos), d.fileName(atomic.LoadInt64(&d.readFileNum)), err)
 					d.handleReadError()
 					continue
 				}
@@ -647,10 +679,10 @@ func (d *diskQueue) ioLoop() {
 			count++
 			// moveForward sets needSync flag if a file is removed
 			d.moveForward()
-		case d.depthChan <- d.depth:
-		case <-d.emptyChan:
-			d.emptyResponseChan <- d.deleteAllFiles()
-			count = 0
+		case d.depthChan <- atomic.LoadInt64(&d.depth):
+		//case <-d.emptyChan:
+		//	d.emptyResponseChan <- d.deleteAllFiles()
+		//	count = 0
 		case dataWrite := <-d.writeChan:
 			count++
 			d.writeResponseChan <- d.writeOne(dataWrite)
@@ -668,5 +700,39 @@ func (d *diskQueue) ioLoop() {
 exit:
 	d.logf(INFO, "DISKQUEUE(%s): closing ... ioLoop", d.name)
 	syncTicker.Stop()
+	close(d.exitFileChan) //wait syncFile exit
+	<-d.exitSyncFileChan
+	d.logf(INFO, "DISKQUEUE(%s) closing....syncFile", d.name)
 	d.exitSyncChan <- 1
+}
+
+//asynchronous persistence
+func (d *diskQueue) syncFile() {
+	for {
+		select {
+		case <-d.syncChan:
+			d.asyncFileData()
+		case <-d.emptyChan:
+			d.emptyResponseChan <- d.deleteAllFiles()
+			d.Depth()
+		case <-d.exitFileChan:
+			d.syncChan = nil
+			goto exit
+		}
+	}
+exit:
+	d.exitSyncFileChan <- 1
+}
+
+func (d *diskQueue) asyncFileData() {
+	defer func() {
+		err := recover()
+		if err != nil {
+			d.logf(ERROR, "DISKQUEUE(%s) asyncFileData recover: %s", d.name, err)
+		}
+	}()
+	err := d.sync()
+	if err != nil {
+		d.logf(ERROR, "DISKQUEUE(%s) asyncFileData failed: %s", d.name, err.Error())
+	}
 }
