@@ -106,7 +106,7 @@ type diskQueue struct {
 	syncChan         chan int64
 	exitFileChan     chan int
 	exitSyncFileChan chan int
-	syncMutex        sync.Mutex
+	syncMutex        sync.RWMutex
 }
 
 // New instantiates an instance of diskQueue, retrieving metadata
@@ -369,10 +369,11 @@ func (d *diskQueue) writeOne(data []byte) error {
 
 	if d.writeFile == nil {
 		curFileName := d.fileName(d.writeFileNum)
-		d.writeFile, err = os.OpenFile(curFileName, os.O_RDWR|os.O_CREATE, 0600)
+		fd, err := os.OpenFile(curFileName, os.O_RDWR|os.O_CREATE, 0600)
 		if err != nil {
 			return err
 		}
+		d.writeFile = fd
 
 		d.logf(INFO, "DISKQUEUE(%s): writeOne() opened %s", d.name, curFileName)
 
@@ -436,7 +437,9 @@ func (d *diskQueue) writeOne(data []byte) error {
 
 // sync fsyncs the current writeFile and persists metadata
 func (d *diskQueue) sync() error {
+	d.syncMutex.RLock()
 	if d.writeFile != nil {
+		d.syncMutex.RUnlock()
 		err := d.writeFile.Sync()
 		if err != nil {
 			d.syncMutex.Lock()
@@ -445,6 +448,8 @@ func (d *diskQueue) sync() error {
 			d.syncMutex.Unlock()
 			return err
 		}
+	} else {
+		d.syncMutex.RUnlock()
 	}
 
 	d.syncMutex.Lock()
@@ -590,10 +595,12 @@ func (d *diskQueue) handleReadError() {
 	if d.readFileNum == d.writeFileNum {
 		// if you can't properly read from the current write file it's safe to
 		// assume that something is fucked and we should skip the current file too
+		d.syncMutex.Lock()
 		if d.writeFile != nil {
 			d.writeFile.Close()
 			d.writeFile = nil
 		}
+		d.syncMutex.Unlock()
 		atomic.AddInt64(&d.writeFileNum, 1)
 		atomic.StoreInt64(&d.writePos, 0)
 	}
@@ -612,10 +619,11 @@ func (d *diskQueue) handleReadError() {
 			d.name, badFn, badRenameFn)
 	}
 
-	d.readFileNum++
-	d.readPos = 0
-	d.nextReadFileNum = d.readFileNum
-	d.nextReadPos = 0
+	atomic.AddInt64(&d.readFileNum, 1)
+	atomic.StoreInt64(&d.readPos, 0)
+	readFileNum := atomic.LoadInt64(&d.readFileNum)
+	atomic.StoreInt64(&d.nextReadFileNum, readFileNum)
+	atomic.StoreInt64(&d.nextReadPos, 0)
 
 	// significant state change, schedule a sync on the next iteration
 	d.needSync = true
