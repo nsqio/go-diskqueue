@@ -373,7 +373,9 @@ func (d *diskQueue) writeOne(data []byte) error {
 		if err != nil {
 			return err
 		}
+		d.syncMutex.Lock()
 		d.writeFile = fd
+		d.syncMutex.Unlock()
 
 		d.logf(INFO, "DISKQUEUE(%s): writeOne() opened %s", d.name, curFileName)
 
