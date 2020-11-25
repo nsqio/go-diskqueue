@@ -28,6 +28,9 @@ const (
 
 type AppLogFunc func(lvl LogLevel, f string, args ...interface{})
 
+// EmptyCallback is called when the disk queue has no messages (after the last message was written)
+type EmptyCallback func()
+
 func (l LogLevel) String() string {
 	switch l {
 	case 1:
@@ -99,14 +102,15 @@ type diskQueue struct {
 	exitChan          chan int
 	exitSyncChan      chan int
 
-	logf AppLogFunc
+	logf          AppLogFunc
+	emptyCallback EmptyCallback
 }
 
 // New instantiates an instance of diskQueue, retrieving metadata
 // from the filesystem and starting the read ahead goroutine
 func New(name string, dataPath string, maxBytesPerFile int64,
 	minMsgSize int32, maxMsgSize int32,
-	syncEvery int64, syncTimeout time.Duration, logf AppLogFunc) Interface {
+	syncEvery int64, syncTimeout time.Duration, logf AppLogFunc, cb EmptyCallback) Interface {
 	d := diskQueue{
 		name:              name,
 		dataPath:          dataPath,
@@ -124,6 +128,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		syncEvery:         syncEvery,
 		syncTimeout:       syncTimeout,
 		logf:              logf,
+		emptyCallback:     cb,
 	}
 
 	// no need to lock here, nothing else could possibly be touching this instance
@@ -647,6 +652,9 @@ func (d *diskQueue) ioLoop() {
 			count++
 			// moveForward sets needSync flag if a file is removed
 			d.moveForward()
+			if d.depth == 0 && d.emptyCallback != nil {
+				d.emptyCallback()
+			}
 		case d.depthChan <- d.depth:
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()
