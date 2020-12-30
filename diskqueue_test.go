@@ -420,6 +420,61 @@ func TestDiskQueueTorture(t *testing.T) {
 	Equal(t, depth, read)
 }
 
+func TestDiskQueueResize(t *testing.T) {
+	l := NewTestLogger(t)
+	dqName := "test_disk_queue_resize" + strconv.Itoa(int(time.Now().Unix()))
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("nsq-test-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpDir)
+	msg := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	ml := int64(len(msg))
+	dq := New(dqName, tmpDir, 8*(ml+4), int32(ml), 1<<10, 2500, time.Second, l)
+	NotNil(t, dq)
+	Equal(t, int64(0), dq.Depth())
+
+	for i := 0; i < 8; i++ {
+		msg[0] = byte(i)
+		err := dq.Put(msg)
+		Nil(t, err)
+	}
+	Equal(t, int64(1), dq.(*diskQueue).writeFileNum)
+	Equal(t, int64(0), dq.(*diskQueue).writePos)
+	Equal(t, int64(8), dq.Depth())
+
+	dq.Close()
+	dq = New(dqName, tmpDir, 10*(ml+4), int32(ml), 1<<10, 2500, time.Second, l)
+
+	for i := 0; i < 10; i++ {
+		msg[0] = byte(20 + i)
+		err := dq.Put(msg)
+		Nil(t, err)
+	}
+	Equal(t, int64(2), dq.(*diskQueue).writeFileNum)
+	Equal(t, int64(0), dq.(*diskQueue).writePos)
+	Equal(t, int64(18), dq.Depth())
+
+	for i := 0; i < 8; i++ {
+		msg[0] = byte(i)
+		Equal(t, msg, <-dq.ReadChan())
+	}
+	for i := 0; i < 10; i++ {
+		msg[0] = byte(20 + i)
+		Equal(t, msg, <-dq.ReadChan())
+	}
+	Equal(t, int64(0), dq.Depth())
+	dq.Close()
+
+	// make sure there aren't "bad" files due to read logic errors
+	files, err := filepath.Glob(filepath.Join(tmpDir, dqName+"*.bad"))
+	Nil(t, err)
+	// empty files slice is actually nil, length check is less confusing
+	if len(files) > 0 {
+		Equal(t, []string{}, files)
+	}
+}
+
 func BenchmarkDiskQueuePut16(b *testing.B) {
 	benchmarkDiskQueuePut(16, b)
 }
