@@ -153,77 +153,58 @@ func TestDiskQueuePeek(t *testing.T) {
 		}
 
 		for i := 10; i > 0; i-- {
-			data, advance := dq.Peek()
-			Equal(t, msg, data)
+			Equal(t, msg, <-dq.PeekChan())
 			Equal(t, int64(i), dq.Depth())
-			advance()
+
+			Equal(t, msg, <-dq.ReadChan())
 			Equal(t, int64(i-1), dq.Depth())
 		}
 
 		Nil(t, dq.Empty())
 	})
 
-	t.Run("multi_peek", func(t *testing.T) {
-		err = dq.Put(msg)
-		Nil(t, err)
-		Equal(t, int64(1), dq.Depth())
-
-		data, advance := dq.Peek()
-		Equal(t, msg, data)
-		Equal(t, int64(1), dq.Depth())
-
-		data, advance = dq.Peek()
-		Equal(t, msg, data)
-		Equal(t, int64(1), dq.Depth())
-
-		advance()
-		Equal(t, int64(0), dq.Depth())
-
-		Nil(t, dq.Empty())
-	})
-
-	t.Run("multi_advance", func(t *testing.T) {
-		for i := 0; i < 5; i++ {
+	t.Run("peek-read", func(t *testing.T) {
+		for i := 0; i < 10; i++ {
 			err := dq.Put(msg)
 			Nil(t, err)
 			Equal(t, int64(i+1), dq.Depth())
 		}
 
-		data, advance := dq.Peek()
-		Equal(t, msg, data)
-		Equal(t, int64(5), dq.Depth())
+		for i := 10; i > 0; i-- {
+			Equal(t, msg, <-dq.PeekChan())
+			Equal(t, int64(i), dq.Depth())
 
-		advance()
-		Equal(t, int64(4), dq.Depth())
+			Equal(t, msg, <-dq.PeekChan())
+			Equal(t, int64(i), dq.Depth())
 
-		advance()
-		Equal(t, int64(4), dq.Depth())
+			Equal(t, msg, <-dq.ReadChan())
+			Equal(t, int64(i-1), dq.Depth())
+		}
 
 		Nil(t, dq.Empty())
 	})
 
-	t.Run("peek_read", func(t *testing.T) {
-		for i := 0; i < 5; i++ {
+	t.Run("read-peek", func(t *testing.T) {
+		for i := 0; i < 10; i++ {
 			err := dq.Put(msg)
 			Nil(t, err)
 			Equal(t, int64(i+1), dq.Depth())
 		}
 
-		Equal(t, msg, <-dq.ReadChan())
-		Equal(t, int64(4), dq.Depth())
+		for i := 10; i > 1; i-- {
+			Equal(t, msg, <-dq.PeekChan())
+			Equal(t, int64(i), dq.Depth())
 
-		data, advance := dq.Peek()
-		Equal(t, msg, data)
-		Equal(t, int64(4), dq.Depth())
+			Equal(t, msg, <-dq.ReadChan())
+			Equal(t, int64(i-1), dq.Depth())
 
-		Equal(t, msg, <-dq.ReadChan())
-		Equal(t, int64(3), dq.Depth())
-
-		advance()
-		Equal(t, int64(3), dq.Depth())
+			Equal(t, msg, <-dq.PeekChan())
+			Equal(t, int64(i-1), dq.Depth())
+		}
 
 		Nil(t, dq.Empty())
 	})
+
 }
 
 func assertFileNotExist(t *testing.T, fn string) {
