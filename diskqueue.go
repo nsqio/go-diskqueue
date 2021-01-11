@@ -28,6 +28,8 @@ const (
 
 type AppLogFunc func(lvl LogLevel, f string, args ...interface{})
 
+type AdvanceFunc func()
+
 func (l LogLevel) String() string {
 	switch l {
 	case 1:
@@ -47,6 +49,7 @@ func (l LogLevel) String() string {
 type Interface interface {
 	Put([]byte) error
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
+	Peek() ([]byte, AdvanceFunc)
 	Close() error
 	Delete() error
 	Depth() int64
@@ -92,6 +95,9 @@ type diskQueue struct {
 	readChan chan []byte
 
 	// internal channels
+	peekChan          chan []byte
+	advanceChan       chan int
+	advanceSyncChan   chan int
 	depthChan         chan int64
 	writeChan         chan []byte
 	writeResponseChan chan error
@@ -115,6 +121,9 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		minMsgSize:        minMsgSize,
 		maxMsgSize:        maxMsgSize,
 		readChan:          make(chan []byte),
+		peekChan:          make(chan []byte),
+		advanceChan:       make(chan int),
+		advanceSyncChan:   make(chan int),
 		depthChan:         make(chan int64),
 		writeChan:         make(chan []byte),
 		writeResponseChan: make(chan error),
@@ -150,6 +159,13 @@ func (d *diskQueue) Depth() int64 {
 // ReadChan returns the receive-only []byte channel for reading data
 func (d *diskQueue) ReadChan() <-chan []byte {
 	return d.readChan
+}
+
+func (d *diskQueue) Peek() ([]byte, AdvanceFunc) {
+	return <-d.peekChan, func() {
+		d.advanceChan <- 1
+		<-d.advanceSyncChan
+	}
 }
 
 // Put writes a []byte to the queue
@@ -623,6 +639,8 @@ func (d *diskQueue) ioLoop() {
 	var err error
 	var count int64
 	var r chan []byte
+	var p chan []byte
+	var moveForward bool
 
 	syncTicker := time.NewTicker(d.syncTimeout)
 
@@ -651,8 +669,10 @@ func (d *diskQueue) ioLoop() {
 				}
 			}
 			r = d.readChan
+			p = d.peekChan
 		} else {
 			r = nil
+			p = nil
 		}
 
 		select {
@@ -662,6 +682,16 @@ func (d *diskQueue) ioLoop() {
 			count++
 			// moveForward sets needSync flag if a file is removed
 			d.moveForward()
+			moveForward = false
+		case p <- dataRead:
+			moveForward = true
+		case <-d.advanceChan:
+			if moveForward {
+				count++
+				d.moveForward()
+				moveForward = false
+			}
+			d.advanceSyncChan <- 1
 		case d.depthChan <- d.depth:
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()
