@@ -498,7 +498,7 @@ func (d *diskQueue) persistMetaData() error {
 		f.Close()
 		return err
 	}
-	f.Sync()
+	f.Sync() //nolint:errcheck
 	f.Close()
 
 	// atomically rename
@@ -548,7 +548,7 @@ func (d *diskQueue) checkTailCorruption(depth int64) {
 				d.name, d.readPos, d.writePos)
 		}
 
-		d.skipToNextRWFile()
+		d.skipToNextRWFile() //nolint:errcheck
 		d.needSync = true
 	}
 }
