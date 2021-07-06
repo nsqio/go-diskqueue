@@ -91,13 +91,46 @@ func TestDiskQueue(t *testing.T) {
 	NotNil(t, dq)
 	Equal(t, int64(0), dq.Depth())
 
+	msgOut, err := dq.Peek()
+	Nil(t, msgOut)
+	Nil(t, err)
+
 	msg := []byte("test")
+	msg1 := []byte("test1")
+
 	err = dq.Put(msg)
 	Nil(t, err)
 	Equal(t, int64(1), dq.Depth())
 
-	msgOut := <-dq.ReadChan()
+	msgOut, err = dq.Peek()
 	Equal(t, msg, msgOut)
+	Nil(t, err)
+
+	msgOut, err = dq.Peek()
+	Equal(t, msg, msgOut)
+	Nil(t, err)
+
+	err = dq.Put(msg1)
+	Nil(t, err)
+	Equal(t, int64(2), dq.Depth())
+
+	msgOut, err = dq.Peek()
+	Equal(t, msg, msgOut)
+	Nil(t, err)
+
+	msgOut = <-dq.ReadChan()
+	Equal(t, msg, msgOut)
+
+	msgOut, err = dq.Peek()
+	Equal(t, msg1, msgOut)
+	Nil(t, err)
+
+	msgOut = <-dq.ReadChan()
+	Equal(t, msg1, msgOut)
+
+	msgOut, err = dq.Peek()
+	Nil(t, msgOut)
+	Nil(t, err)
 }
 
 func TestDiskQueueRoll(t *testing.T) {
@@ -170,6 +203,9 @@ func TestDiskQueueEmpty(t *testing.T) {
 
 	numFiles := dq.(*diskQueue).writeFileNum
 	dq.Empty()
+	outMsg, err := dq.Peek()
+	Nil(t, outMsg)
+	Nil(t, err)
 
 	assertFileNotExist(t, dq.(*diskQueue).metaDataFileName())
 	for i := int64(0); i <= numFiles; i++ {

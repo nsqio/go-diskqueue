@@ -51,6 +51,7 @@ type Interface interface {
 	Delete() error
 	Depth() int64
 	Empty() error
+  Peek() ([]byte, error)
 }
 
 // diskQueue implements a filesystem backed FIFO queue
@@ -90,6 +91,7 @@ type diskQueue struct {
 
 	// exposed via ReadChan()
 	readChan chan []byte
+	peekChan chan []byte
 
 	// internal channels
 	depthChan         chan int64
@@ -115,6 +117,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		minMsgSize:        minMsgSize,
 		maxMsgSize:        maxMsgSize,
 		readChan:          make(chan []byte),
+		peekChan:          make(chan []byte),
 		depthChan:         make(chan int64),
 		writeChan:         make(chan []byte),
 		writeResponseChan: make(chan error),
@@ -150,6 +153,14 @@ func (d *diskQueue) Depth() int64 {
 // ReadChan returns the receive-only []byte channel for reading data
 func (d *diskQueue) ReadChan() <-chan []byte {
 	return d.readChan
+}
+
+func (d *diskQueue) Peek() ([]byte, error) {
+	ret, ok := <-d.peekChan
+	if !ok {
+		return nil, errors.New("exiting")
+	}
+	return ret, nil
 }
 
 // Put writes a []byte to the queue
@@ -195,6 +206,7 @@ func (d *diskQueue) exit(deleted bool) error {
 	<-d.exitSyncChan
 
 	close(d.depthChan)
+  close(d.peekChan)
 
 	if d.readFile != nil {
 		d.readFile.Close()
@@ -581,7 +593,6 @@ func (d *diskQueue) moveForward() {
 	d.readFileNum = d.nextReadFileNum
 	d.readPos = d.nextReadPos
 	d.depth -= 1
-
 	// see if we need to clean up the old file
 	if oldReadFileNum != d.nextReadFileNum {
 		// sync every time we start reading from a new file
@@ -675,6 +686,7 @@ func (d *diskQueue) ioLoop() {
 			}
 			r = d.readChan
 		} else {
+			dataRead = nil
 			r = nil
 		}
 
@@ -685,6 +697,7 @@ func (d *diskQueue) ioLoop() {
 			count++
 			// moveForward sets needSync flag if a file is removed
 			d.moveForward()
+		case d.peekChan <- dataRead:
 		case d.depthChan <- d.depth:
 		case <-d.emptyChan:
 			d.emptyResponseChan <- d.deleteAllFiles()
