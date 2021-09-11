@@ -631,6 +631,8 @@ func (d *diskQueue) handleReadError() {
 
 	// significant state change, schedule a sync on the next iteration
 	d.needSync = true
+
+	d.checkTailCorruption(d.depth)
 }
 
 // ioLoop provides the backend for exposing a go channel (via ReadChan())

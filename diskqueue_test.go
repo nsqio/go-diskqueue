@@ -247,6 +247,23 @@ func TestDiskQueueCorruption(t *testing.T) {
 	dq.Put(msg)
 
 	Equal(t, msg, <-dq.ReadChan())
+
+	dq.Put(msg)
+	dq.Put(msg)
+	// corrupt the last file
+	dqFn = dq.(*diskQueue).fileName(5)
+	os.Truncate(dqFn, 100)
+
+	Equal(t, int64(2), dq.Depth())
+
+	// return one message and try reading again from corrupted file
+	<-dq.ReadChan()
+
+	// give diskqueue time to handle read error
+	time.Sleep(50 * time.Millisecond)
+
+    // the last log file is now considered corrupted leaving no more log messages
+	Equal(t, int64(0), dq.Depth())
 }
 
 type md struct {
