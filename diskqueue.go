@@ -358,6 +358,33 @@ func (d *diskQueue) readOne() ([]byte, error) {
 func (d *diskQueue) writeOne(data []byte) error {
 	var err error
 
+	dataLen := int32(len(data))
+	totalBytes := int64(4 + dataLen)
+
+	if dataLen < d.minMsgSize || dataLen > d.maxMsgSize {
+		return fmt.Errorf("invalid message write size (%d) minMsgSize=%d maxMsgSize=%d", dataLen, d.minMsgSize, d.maxMsgSize)
+	}
+
+	// will not wrap-around if maxBytesPerFile + maxMsgSize < Int64Max
+	if d.writePos > 0 && d.writePos+totalBytes > d.maxBytesPerFile {
+		if d.readFileNum == d.writeFileNum {
+			d.maxBytesPerFileRead = d.writePos
+		}
+
+		d.writeFileNum++
+		d.writePos = 0
+
+		// sync every time we start writing to a new file
+		err = d.sync()
+		if err != nil {
+			d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
+		}
+
+		if d.writeFile != nil {
+			d.writeFile.Close()
+			d.writeFile = nil
+		}
+	}
 	if d.writeFile == nil {
 		curFileName := d.fileName(d.writeFileNum)
 		d.writeFile, err = os.OpenFile(curFileName, os.O_RDWR|os.O_CREATE, 0600)
@@ -375,12 +402,6 @@ func (d *diskQueue) writeOne(data []byte) error {
 				return err
 			}
 		}
-	}
-
-	dataLen := int32(len(data))
-
-	if dataLen < d.minMsgSize || dataLen > d.maxMsgSize {
-		return fmt.Errorf("invalid message write size (%d) minMsgSize=%d maxMsgSize=%d", dataLen, d.minMsgSize, d.maxMsgSize)
 	}
 
 	d.writeBuf.Reset()
@@ -402,29 +423,8 @@ func (d *diskQueue) writeOne(data []byte) error {
 		return err
 	}
 
-	totalBytes := int64(4 + dataLen)
 	d.writePos += totalBytes
 	d.depth += 1
-
-	if d.writePos >= d.maxBytesPerFile {
-		if d.readFileNum == d.writeFileNum {
-			d.maxBytesPerFileRead = d.writePos
-		}
-
-		d.writeFileNum++
-		d.writePos = 0
-
-		// sync every time we start writing to a new file
-		err = d.sync()
-		if err != nil {
-			d.logf(ERROR, "DISKQUEUE(%s) failed to sync - %s", d.name, err)
-		}
-
-		if d.writeFile != nil {
-			d.writeFile.Close()
-			d.writeFile = nil
-		}
-	}
 
 	return err
 }
