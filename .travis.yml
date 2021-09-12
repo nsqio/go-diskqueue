@@ -1,8 +1,0 @@
-language: go
-go:
-  - 1.x
-script:
-  - GOMAXPROCS=1 go test -v
-  - GOMAXPROCS=4 go test -v -race
-notifications:
-  email: false
