@@ -21,7 +21,7 @@ jobs:
           - "amd64"
           - "386"
 
-    container: "golang:${{matrix.gover}}-alpine"
+    container: "golang:${{matrix.gover}}"
     env:
       GOARCH: "${{matrix.goarch}}"
 
@@ -30,8 +30,12 @@ jobs:
 
       - name: test
         run: |
-          GOMAXPROCS=1 go test -v
-          GOMAXPROCS=4 go test -v -race
+          go test -list Test
+          GOMAXPROCS=1 go test
+          if [ "$GOARCH" = "amd64" ]; then
+            echo "With -race:"
+            GOMAXPROCS=4 go test -race
+          fi
 
       - name: lint
         run: |
