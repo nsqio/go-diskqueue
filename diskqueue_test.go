@@ -262,7 +262,7 @@ func TestDiskQueueCorruption(t *testing.T) {
 	// give diskqueue time to handle read error
 	time.Sleep(50 * time.Millisecond)
 
-    // the last log file is now considered corrupted leaving no more log messages
+	// the last log file is now considered corrupted leaving no more log messages
 	Equal(t, int64(0), dq.Depth())
 }
 
