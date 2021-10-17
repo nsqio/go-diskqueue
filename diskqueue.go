@@ -47,6 +47,7 @@ func (l LogLevel) String() string {
 type Interface interface {
 	Put([]byte) error
 	ReadChan() <-chan []byte // this is expected to be an *unbuffered* channel
+	PeekChan() <-chan []byte // this is expected to be an *unbuffered* channel
 	Close() error
 	Delete() error
 	Depth() int64
@@ -91,6 +92,9 @@ type diskQueue struct {
 	// exposed via ReadChan()
 	readChan chan []byte
 
+	// exposed via PeekChan()
+	peekChan chan []byte
+
 	// internal channels
 	depthChan         chan int64
 	writeChan         chan []byte
@@ -115,6 +119,7 @@ func New(name string, dataPath string, maxBytesPerFile int64,
 		minMsgSize:        minMsgSize,
 		maxMsgSize:        maxMsgSize,
 		readChan:          make(chan []byte),
+		peekChan:          make(chan []byte),
 		depthChan:         make(chan int64),
 		writeChan:         make(chan []byte),
 		writeResponseChan: make(chan error),
@@ -150,6 +155,10 @@ func (d *diskQueue) Depth() int64 {
 // ReadChan returns the receive-only []byte channel for reading data
 func (d *diskQueue) ReadChan() <-chan []byte {
 	return d.readChan
+}
+
+func (d *diskQueue) PeekChan() <-chan []byte {
+	return d.peekChan
 }
 
 // Put writes a []byte to the queue
@@ -648,6 +657,7 @@ func (d *diskQueue) ioLoop() {
 	var err error
 	var count int64
 	var r chan []byte
+	var p chan []byte
 
 	syncTicker := time.NewTicker(d.syncTimeout)
 
@@ -676,13 +686,16 @@ func (d *diskQueue) ioLoop() {
 				}
 			}
 			r = d.readChan
+			p = d.peekChan
 		} else {
 			r = nil
+			p = nil
 		}
 
 		select {
 		// the Go channel spec dictates that nil channel operations (read or write)
 		// in a select are skipped, we set r to d.readChan only when there is data to read
+		case p <- dataRead:
 		case r <- dataRead:
 			count++
 			// moveForward sets needSync flag if a file is removed
