@@ -147,27 +147,17 @@ func TestDiskQueueRollAsync(t *testing.T) {
 	NotNil(t, dq)
 	Equal(t, int64(0), dq.Depth())
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		for i := 0; i < 20; i++ {
-			err := dq.Put(msg)
-			Nil(t, err)
-		}
+	for i := 0; i < 11; i++ {
+		err := dq.Put(msg)
+		Nil(t, err)
+		Equal(t, int64(1), dq.Depth())
 
-		wg.Done()
-	}()
+		Equal(t, msg, <-dq.ReadChan())
+		Equal(t, int64(0), dq.Depth())
+	}
 
-	wg.Add(1)
-	go func() {
-		for i := 20; i > 0; i-- {
-			Equal(t, msg, <-dq.ReadChan())
-		}
-
-		wg.Done()
-	}()
-
-	wg.Wait()
+	Equal(t, int64(1), dq.(*diskQueue).writeFileNum)
+	Equal(t, int64(ml+4), dq.(*diskQueue).writePos)
 
 	filepath.Walk(tmpDir, func(path string, info fs.FileInfo, err error) error {
 		if strings.HasSuffix(path, ".bad") {
