@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path"
@@ -11,6 +12,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -128,6 +130,52 @@ func TestDiskQueueRoll(t *testing.T) {
 		Equal(t, msg, <-dq.ReadChan())
 		Equal(t, int64(i-1), dq.Depth())
 	}
+}
+
+func TestDiskQueueRollAsync(t *testing.T) {
+	l := NewTestLogger(t)
+	dqName := "test_disk_queue_roll" + strconv.Itoa(int(time.Now().Unix()))
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("nsq-test-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpDir)
+	msg := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 0}
+	ml := int64(len(msg))
+	dq := New(dqName, tmpDir, 10*(ml+4), int32(ml), 1<<10, 2500, 2*time.Second, l)
+	defer dq.Close()
+	NotNil(t, dq)
+	Equal(t, int64(0), dq.Depth())
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		for i := 0; i < 20; i++ {
+			err := dq.Put(msg)
+			Nil(t, err)
+		}
+
+		wg.Done()
+	}()
+
+	wg.Add(1)
+	go func() {
+		for i := 20; i > 0; i-- {
+			Equal(t, msg, <-dq.ReadChan())
+		}
+
+		wg.Done()
+	}()
+
+	wg.Wait()
+
+	filepath.Walk(tmpDir, func(path string, info fs.FileInfo, err error) error {
+		if strings.HasSuffix(path, ".bad") {
+			t.FailNow()
+		}
+
+		return err
+	})
 }
 
 func TestDiskQueuePeek(t *testing.T) {
