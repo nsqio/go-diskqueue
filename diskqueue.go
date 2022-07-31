@@ -349,7 +349,7 @@ func (d *diskQueue) readOne() ([]byte, error) {
 	// we only consider rotating if we're reading a "complete" file
 	// and since we cannot know the size at which it was rotated, we
 	// rely on maxBytesPerFileRead rather than maxBytesPerFile
-	if d.readFileNum < d.writeFileNum && d.nextReadPos >= d.maxBytesPerFileRead {
+	if d.readFileNum <= d.writeFileNum && d.nextReadPos >= d.maxBytesPerFileRead {
 		if d.readFile != nil {
 			d.readFile.Close()
 			d.readFile = nil
@@ -394,6 +394,7 @@ func (d *diskQueue) writeOne(data []byte) error {
 			d.writeFile = nil
 		}
 	}
+
 	if d.writeFile == nil {
 		curFileName := d.fileName(d.writeFileNum)
 		d.writeFile, err = os.OpenFile(curFileName, os.O_RDWR|os.O_CREATE, 0600)
@@ -675,7 +676,7 @@ func (d *diskQueue) ioLoop() {
 			count = 0
 		}
 
-		if (d.readFileNum < d.writeFileNum) || (d.readPos < d.writePos) {
+		if d.readFileNum < d.writeFileNum || (d.readFileNum == d.writeFileNum && d.readPos < d.writePos) {
 			if d.nextReadPos == d.readPos {
 				dataRead, err = d.readOne()
 				if err != nil {

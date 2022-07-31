@@ -310,17 +310,22 @@ func TestDiskQueueCorruption(t *testing.T) {
 	dqFn := dq.(*diskQueue).fileName(1)
 	os.Truncate(dqFn, 400) // 3 valid messages, 5 corrupted
 
-	for i := 0; i < 19; i++ { // 1 message leftover in 4th file
-		Equal(t, msg, <-dq.ReadChan())
-	}
-
 	// corrupt the 4th (current) file
 	dqFn = dq.(*diskQueue).fileName(3)
 	os.Truncate(dqFn, 100)
 
+	for i := 0; i < 18; i++ {
+		Equal(t, msg, <-dq.ReadChan())
+	}
+	Equal(t, int64(7), dq.Depth())
+
+	Equal(t, msg, <-dq.ReadChan())
+	Equal(t, int64(0), dq.Depth())
+
 	dq.Put(msg) // in 5th file
 
 	Equal(t, msg, <-dq.ReadChan())
+	Equal(t, int64(0), dq.Depth())
 
 	// write a corrupt (len 0) message at the 5th (current) file
 	dq.(*diskQueue).writeFile.Write([]byte{0, 0, 0, 0})
@@ -333,6 +338,7 @@ func TestDiskQueueCorruption(t *testing.T) {
 
 	dq.Put(msg)
 	dq.Put(msg)
+
 	// corrupt the last file
 	dqFn = dq.(*diskQueue).fileName(5)
 	os.Truncate(dqFn, 100)
@@ -340,7 +346,7 @@ func TestDiskQueueCorruption(t *testing.T) {
 	Equal(t, int64(2), dq.Depth())
 
 	// return one message and try reading again from corrupted file
-	<-dq.ReadChan()
+	Equal(t, msg, <-dq.ReadChan())
 
 	// give diskqueue time to handle read error
 	time.Sleep(50 * time.Millisecond)
