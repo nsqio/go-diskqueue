@@ -38,4 +38,8 @@ jobs:
       - name: lint
         run: |
           go vet
-          gofmt -w *.go && git diff --exit-code
+          GOFMT_OUT=$(gofmt -l *.go)
+          if [ -n "$GOFMT_OUT" ]; then
+              echo $GOFMT_OUT
+              exit 1
+          fi
