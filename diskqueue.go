@@ -279,11 +279,43 @@ func (d *diskQueue) skipToNextRWFile() error {
 	return err
 }
 
+func (d *diskQueue) readRollFile() {
+	d.nextReadFileNum++
+	d.nextReadPos = 0
+
+	oldReadFileNum := d.readFileNum
+	d.readFileNum = d.nextReadFileNum
+	d.readPos = d.nextReadPos
+
+	// sync every time we start reading from a new file
+	d.needSync = true
+
+	fn := d.fileName(oldReadFileNum)
+	err := os.Remove(fn)
+	if err != nil {
+		d.logf(ERROR, "DISKQUEUE(%s) failed to Remove(%s) - %s", d.name, fn, err)
+	}
+
+	d.checkTailCorruption(d.depth)
+}
+
 // readOne performs a low level filesystem read for a single []byte
 // while advancing read positions and rolling files, if necessary
 func (d *diskQueue) readOne() ([]byte, error) {
 	var err error
 	var msgSize int32
+
+	// we only consider rotating if we're reading a "complete" file
+	// and since we cannot know the size at which it was rotated, we
+	// rely on maxBytesPerFileRead rather than maxBytesPerFile
+	if d.readFileNum < d.writeFileNum && d.nextReadPos >= d.maxBytesPerFileRead && d.readFile != nil {
+		if d.readFile != nil {
+			d.readFile.Close()
+			d.readFile = nil
+		}
+
+		d.readRollFile()
+	}
 
 	if d.readFile == nil {
 		curFileName := d.fileName(d.readFileNum)
@@ -345,19 +377,6 @@ func (d *diskQueue) readOne() ([]byte, error) {
 	// (where readFileNum, readPos will actually be advanced)
 	d.nextReadPos = d.readPos + totalBytes
 	d.nextReadFileNum = d.readFileNum
-
-	// we only consider rotating if we're reading a "complete" file
-	// and since we cannot know the size at which it was rotated, we
-	// rely on maxBytesPerFileRead rather than maxBytesPerFile
-	if d.readFileNum < d.writeFileNum && d.nextReadPos >= d.maxBytesPerFileRead {
-		if d.readFile != nil {
-			d.readFile.Close()
-			d.readFile = nil
-		}
-
-		d.nextReadFileNum++
-		d.nextReadPos = 0
-	}
 
 	return readBuf, nil
 }

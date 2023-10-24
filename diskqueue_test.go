@@ -77,6 +77,17 @@ func NewTestLogger(tbl tbLog) AppLogFunc {
 	}
 }
 
+func NewTestLoggerFatalAtError(tbl tbLog, fatalChan chan error) AppLogFunc {
+	return func(lvl LogLevel, f string, args ...interface{}) {
+		if lvl == ERROR || lvl == FATAL {
+			// tbl.Fatal(fmt.Sprintf(lvl.String()+": "+f, args...))
+			fatalChan <- fmt.Errorf(lvl.String()+": "+f, args...)
+		}
+
+		tbl.Log(fmt.Sprintf(lvl.String()+": "+f, args...))
+	}
+}
+
 func TestDiskQueue(t *testing.T) {
 	l := NewTestLogger(t)
 
@@ -571,6 +582,37 @@ func TestDiskQueueResize(t *testing.T) {
 	if len(files) > 0 {
 		Equal(t, []string{}, files)
 	}
+}
+
+func TestWriteRollReadEOF(t *testing.T) {
+	fatalChan := make(chan error, 1)
+	l := NewTestLoggerFatalAtError(t, fatalChan)
+
+	dqName := "test_disk_queue" + strconv.Itoa(int(time.Now().Unix()))
+	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("nsq-test-%d", time.Now().UnixNano()))
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dq := New(dqName, tmpDir, 1024, 4, 1<<10, 2500, 2*time.Second, l)
+	defer dq.Close()
+	NotNil(t, dq)
+	Equal(t, int64(0), dq.Depth())
+
+	for i := 0; i < 205; i++ { // 204 messages fit, but message 205 will be too big
+		msg := []byte(fmt.Sprintf("%05d", i)) // 5 bytes
+		err = dq.Put(msg)
+
+		msgOut := <-dq.ReadChan()
+		Equal(t, msg, msgOut)
+	}
+
+	select {
+	case err = <-fatalChan:
+		t.Fatal(err)
+	default:
+	}
+
 }
 
 func BenchmarkDiskQueuePut16(b *testing.B) {
