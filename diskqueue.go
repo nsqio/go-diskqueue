@@ -316,6 +316,23 @@ func (d *diskQueue) readOne() ([]byte, error) {
 		d.reader = bufio.NewReader(d.readFile)
 	}
 
+	// check if we should rotate to the next file before attempting to read
+	// only rotate if we're reading a completed file (not the current write file)
+	if d.readFileNum < d.writeFileNum && d.readPos >= d.maxBytesPerFileRead {
+		if d.readFile != nil {
+			d.readFile.Close()
+			d.readFile = nil
+		}
+
+		d.readFileNum++
+		d.readPos = 0
+		d.nextReadFileNum = d.readFileNum
+		d.nextReadPos = 0
+
+		// recursively call readOne to open and read from the next file
+		return d.readOne()
+	}
+
 	err = binary.Read(d.reader, binary.BigEndian, &msgSize)
 	if err != nil {
 		d.readFile.Close()
