@@ -831,7 +831,7 @@ func TestWriteRollReadEOF(t *testing.T) {
 	NotNil(t, dq)
 	Equal(t, int64(0), dq.Depth())
 
-	for i := 0; i < 205; i++ { // 204 messages fit, but message 205 will be too big
+	for i := 0; i < 205; i++ { // 113 messages fit(5 + 4 bytes), but message 114 and later will be too big
 		msg := []byte(fmt.Sprintf("%05d", i)) // 5 bytes
 		err = dq.Put(msg)
 

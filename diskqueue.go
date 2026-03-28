@@ -607,7 +607,7 @@ func (d *diskQueue) moveForward() {
 	d.checkTailCorruption(d.depth)
 }
 
-func (d *diskQueue) handleReadError() {
+func (d *diskQueue) handleReadError(err error) {
 	// jump to the next read file and rename the current (bad) file
 	if d.readFileNum == d.writeFileNum {
 		// if you can't properly read from the current write file it's safe to
@@ -620,18 +620,21 @@ func (d *diskQueue) handleReadError() {
 		d.writePos = 0
 	}
 
-	badFn := d.fileName(d.readFileNum)
-	badRenameFn := badFn + ".bad"
+	if err != io.EOF {
 
-	d.logf(WARN,
-		"DISKQUEUE(%s) jump to next file and saving bad file as %s",
-		d.name, badRenameFn)
+		badFn := d.fileName(d.readFileNum)
+		badRenameFn := badFn + ".bad"
 
-	err := os.Rename(badFn, badRenameFn)
-	if err != nil {
-		d.logf(ERROR,
-			"DISKQUEUE(%s) failed to rename bad diskqueue file %s to %s",
-			d.name, badFn, badRenameFn)
+		d.logf(WARN,
+			"DISKQUEUE(%s) jump to next file and saving bad file as %s",
+			d.name, badRenameFn)
+
+		err := os.Rename(badFn, badRenameFn)
+		if err != nil {
+			d.logf(ERROR,
+				"DISKQUEUE(%s) failed to rename bad diskqueue file %s to %s",
+				d.name, badFn, badRenameFn)
+		}
 	}
 
 	d.readFileNum++
@@ -682,7 +685,7 @@ func (d *diskQueue) ioLoop() {
 				if err != nil {
 					d.logf(ERROR, "DISKQUEUE(%s) reading at %d of %s - %s",
 						d.name, d.readPos, d.fileName(d.readFileNum), err)
-					d.handleReadError()
+					d.handleReadError(err)
 					continue
 				}
 			}
