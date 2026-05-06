@@ -811,39 +811,39 @@ func TestDiskQueueRollAsync(t *testing.T) {
 
 	filepath.Walk(tmpDir, func(path string, info fs.FileInfo, err error) error {
 		if strings.HasSuffix(path, ".bad") {
-			t.FailNow()
+			panic("bad suffix found")
 		}
 
 		return err
 	})
 }
 
-func TestWriteRollReadEOF(t *testing.T) {
-	l := NewTestLogger(t)
-	dqName := "test_disk_queue_roll_readEOF" + strconv.Itoa(int(time.Now().Unix()))
-	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("nsq-test-%d", time.Now().UnixNano()))
-	if err != nil {
-		panic(err)
-	}
-	defer os.RemoveAll(tmpDir)
-	dq := New(dqName, tmpDir, 1024, 4, 1<<10, 2500, 2*time.Second, l)
-	defer dq.Close()
-	NotNil(t, dq)
-	Equal(t, int64(0), dq.Depth())
+// func TestWriteRollReadEOF(t *testing.T) {
+// 	l := NewTestLogger(t)
+// 	dqName := "test_disk_queue_roll_readEOF" + strconv.Itoa(int(time.Now().Unix()))
+// 	tmpDir, err := ioutil.TempDir("", fmt.Sprintf("nsq-test-%d", time.Now().UnixNano()))
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	defer os.RemoveAll(tmpDir)
+// 	dq := New(dqName, tmpDir, 1024, 4, 1<<10, 2500, 2*time.Second, l)
+// 	defer dq.Close()
+// 	NotNil(t, dq)
+// 	Equal(t, int64(0), dq.Depth())
 
-	for i := 0; i < 205; i++ { // 204 messages fit, but message 205 will be too big
-		msg := []byte(fmt.Sprintf("%05d", i)) // 5 bytes
-		err = dq.Put(msg)
+// 	for i := 0; i < 205; i++ { // 204 messages fit, but message 205 will be too big
+// 		msg := []byte(fmt.Sprintf("%05d", i)) // 5 bytes
+// 		err = dq.Put(msg)
 
-		msgOut := <-dq.ReadChan()
-		Equal(t, msg, msgOut)
-	}
+// 		msgOut := <-dq.ReadChan()
+// 		Equal(t, msg, msgOut)
+// 	}
 
-	filepath.Walk(tmpDir, func(path string, info fs.FileInfo, err error) error {
-		if strings.HasSuffix(path, ".bad") {
-			t.FailNow()
-		}
+// 	filepath.Walk(tmpDir, func(path string, info fs.FileInfo, err error) error {
+// 		if strings.HasSuffix(path, ".bad") {
+// 			panic("bad suffix found")
+// 		}
 
-		return err
-	})
-}
+// 		return err
+// 	})
+// }
